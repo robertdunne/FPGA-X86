@@ -1,0 +1,19 @@
+module X86_UI (CLOCK_50, LEDR);
+ input  CLOCK_50;
+ output [9:0] LEDR;
+ clockDivider (CLOCK_50, 50000000, LEDR[0]);
+endmodule
+
+module clockDivider (inputHz, maxCount, outputHz);
+ input inputHz;
+ input [31:0] maxCount;
+ output outputHz;
+ reg squareWave;
+ reg [31:0] count;
+ assign outputHz = squareWave;
+ always @ (posedge(inputHz))
+  begin 
+   count <= count==maxCount ? 1 : count + 1;
+   squareWave <= count>maxCount>>1 ? 1 : 0;
+  end
+endmodule

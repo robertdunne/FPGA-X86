@@ -1,0 +1,10 @@
+module X86_UI (SW, LEDR);
+ input [9:0] SW;
+ output [9:0] LEDR;
+ function [4:0] display;
+  input [4:0] opcode;
+  display = opcode; 
+ endfunction
+ assign LEDR[4:0] = display(SW[4:0]);
+ assign LEDR[9:5] = display(SW[9:5]);
+endmodule

@@ -1,0 +1,506 @@
+// Listing 12.4: Recusive factorial function (abridged version)
+//   1) SW[9:8] select which of AX, CX, DX, BX for hexadecimal display
+//   2) X86 program: Calculate factorial of value on switches SW[7:0]
+//   3) KEY[1] is interrupt signal to read the switch contents
+//   4) KEY[0] resets this X86 imitation
+
+module X86_UI (KEY, CLOCK_50, SW, LEDR, HEX0, HEX1, HEX2, HEX3, HEX4, HEX5);
+ input  [1:0] KEY;
+ input  CLOCK_50;
+ input  [9:0] SW;
+ output [9:0] LEDR;
+ output [7:0] HEX0, HEX1, HEX2, HEX3, HEX4, HEX5;
+//  4-bit binary number displayed on 7-seg display in hexadecimal
+ function [7:0] digit;
+  input [3:0] num; 
+  case (num)
+    0:  digit = 8'b11000000;  // 0
+    1:  digit = 8'b11111001;  // 1
+    2:  digit = 8'b10100100;  // 2
+    3:  digit = 8'b10110000;  // 3
+    4:  digit = 8'b10011001;  // 4
+    5:  digit = 8'b10010010;  // 5
+    6:  digit = 8'b10000010;  // 6
+    7:  digit = 8'b11111000;  // 7
+    8:  digit = 8'b10000000;  // 8
+    9:  digit = 8'b10010000;  // 9
+    10: digit = 8'b10001000;  // A
+    11: digit = 8'b10000011;  // b
+    12: digit = 8'b11000110;  // C
+    13: digit = 8'b10100001;  // d
+    14: digit = 8'b10000110;  // E
+    15: digit = 8'b10001110;  // F
+   endcase
+  endfunction
+// Registers and memory for 8086 imitation
+ reg [7:0] progMem [0:255]; // Program memory
+ reg [7:0] dataMem [0:255]; // Stack memory
+ reg [7:0] IP;              // Instruction Pointer
+ reg [15:0] regW [0:7];     // AX, CX, DX, BX, SP, BP, SI, DI
+ `define OF status86[11]    // Overflow flag status bit
+ `define DF status86[10]    // Direction flag status bit
+ `define IF status86[9]     // Interrpt enable flag
+ `define TF status86[8]     // Trap flag status bit
+ `define SF status86[7]     // Sign flag status bit
+ `define ZF status86[6]     // Zero flag status bit
+ `define AF status86[4]     // Auxilary Carry flag (DAA)
+ `define PF status86[2]     // Parity flag status bit
+ `define CF status86[0]     // Carry flag status bit
+ reg [15:0] status86;
+ assign LEDR[9:8] = {`SF, `ZF};
+
+ reg [7:0] RetAdr;          // Return Address for interrupt
+ reg [15:0] RetFlags;        // Flags saved during interrupt
+ reg run;                   // Mode: running or halted
+ reg [7:0] OutPort0;        // Register for output bit display
+
+ assign HEX5 = digit(IP[7:4]); // Display Instruction Pointer
+ assign HEX4 = digit(IP[3:0]);
+ assign HEX3 = digit(regW[SW[9:8]][15:12]); // Display 16-bit register
+ assign HEX2 = digit(regW[SW[9:8]][11:8]);  // SW[9:8]==0 => AX,
+ assign HEX1 = digit(regW[SW[9:8]][7:4]);   // 1 => CX, 2 => DX,
+ assign HEX0 = digit(regW[SW[9:8]][3:0]);   // SW[9:8]==3 => BX
+ assign LEDR[7:0] = OutPort0;   // Display output address 0
+ 
+// Provide macros and numbers assigned to data registers.
+ `define AX regW[0]     // 16-bit accumulator register
+ `define BX regW[3]     // 16-bit base register
+ `define CX regW[1]     // 16-bit count register
+ `define DX regW[2]     // 16-bit destination register
+ `define SP regW[4]     // 16-bit Stack Pointer
+ `define BP regW[5]     // 16-bit Base Pointer
+ `define AL `AX[7:0]    // Lower 8 bits of AX register
+ `define AH `AX[15:8]   // Upper 8 bits of AX register
+ parameter AX  = 'h20000;  // 16-bit accumulator ID
+ parameter BX  = 'h20003;  // 16-bit base register ID
+ parameter CX  = 'h20001;  // 16-bit count register ID
+ parameter DX  = 'h20002;  // 16-bit destination/data ID
+ parameter SP  = 'h20004;  // 16-bit Stack Pointer ID
+ parameter BP  = 'h20005;  // 16-bit Base Pointer ID
+ parameter AL  = 'h10000;  // ID for lower byte of AX
+ parameter BL  = 'h10003;  // ID for lower byte of BX
+ parameter CL  = 'h10001;  // ID for lower byte of CX
+ parameter DL  = 'h10002;  // ID for lower byte of DX
+ parameter AH  = 'h10004;  // ID for higher byte of AX
+ parameter BH  = 'h10007;  // ID for higher byte of BX
+ parameter CH  = 'h10005;  // ID for higher byte of CX
+ parameter DH  = 'h10006;  // ID for higher byte of DX
+//
+//---------------- Macro definitions for assembly language ----------------
+//
+// 8086 opcodes and instruction mnemonics
+ `define ADD   asADD ('h04, // ADD immediate to AL or AX
+ `define AND   asADD ('h24, // AND immediate to AL or AX
+ `define CALL  asJMP ('hE8, 2, // Call subroutine
+ `define CBW   asHLT ('h98  // Convert Byte to Word (AL -> AX)
+ `define CMP   asADD ('h3C, // Compare immediate to AL or AX
+ `define DEC   asINC ('h48, // Decrement 16-bit register
+ `define HLT   asHLT ('hF4  // Halt
+ `define IN    asIN  ('hEC, // Input to register AL or AX
+ `define INC   asINC ('h40, // Increment 16-bit register
+ `define INT   asHLT ('hCC  // Software Interrupt
+ `define IRET  asHLT ('hCF  // Interrupt Return
+ `define JCXZ  asJR  ('hE3, // Jump if CX contains zero
+ `define JE    asJR  ('h74, // Jump if Equal
+ `define JG    asJR  ('h7F, // Jump if Greater
+ `define JGE   asJR  ('h7D, // Jump if Greater or Equal
+ `define JL    asJR  ('h7C, // Jump if Less
+ `define JLE   asJR  ('h7E, // Jump if Less or Equal
+ `define JMP   asJMP ('hE9, 4, // Jump (unconditionally)
+ `define JNE   asJR  ('h75, // Jump if Not Equal
+ `define JNZ   asJR  ('h75, // Jump if Non-Zero
+ `define JZ    asJR  ('h74, // Jump if Zero
+ `define LOOP  asJR  ('hE2, // Loop using register CX to count
+ `define MOV   asMOV (      // Move immediate word register
+ `define MUL   asMUL ('hF6, // Multiply AX or AL by another register
+ `define NOP   asHLT ('h90  // No Operation
+ `define OUT   asIN  ('hEE, // Output contents of AL or AX
+ `define OR    asADD ('h0C, // Logical OR of constant with AX
+ `define POP   asINC ('h58, // Restore 16-bit register from stack
+ `define POPF  asHLT ('h9C, // Restore 16-bit status register from stack
+ `define PUSH  asINC ('h50, // Save 16-bit register onto stack
+ `define PUSHF asHLT ('h9D, // Save 16-bit status register onto stack
+ `define RET   asHLT ('hC3  // Return from subroutine
+ `define SUB   asADD ('h2C, // Subtract a constant from AX
+ `define TEST  asADD ('hA8, // AND immediate with AL or AX
+ `define XOR   asADD ('h34, // Logical XOR of constant with AX
+ `define LABEL = (ADR       // Assign assembly-time IP to a label
+ `define ORG   ADR = (      // Directive to set memory address
+ `define _     );           // End of instruction and directive
+
+//  Tasks to "assemble" X86 instructions into machine code
+ integer ADR;             // Assembly time instruction pointer
+
+//  X86 instructions that are 1-byte: HLT, NOP, CBW, INT 3
+ task asHLT (); // Only opcode mnemonic on assembly text line
+  input [7:0] opcode;
+  progMem[ADR] <= opcode;
+  ADR = ADR + 1;
+ endtask
+
+//  X86 instructions, 1-byte with register ID: INC, DEC
+ task asINC (); // Opcode mnemonic followed by register ID
+  input [7:0] opcode;
+  input [19:0] regID;
+  progMem[ADR] <= opcode | regID[2:0] ; // INC reg
+  ADR = ADR + 1          ; // Set pointer for next instruction
+ endtask
+
+//  X86 instructions: Jump relative from current IP address
+ task asJR (); // LOOP, JZ, JGE, JA, ...
+  input [7:0] opcode;
+  input [19:0] newadr;       // Jump-to address
+  progMem[ADR] <= opcode   ; // LOOP, JZ, JGE, JA, ...
+  progMem[ADR+1] <= newadr - ADR - 2 ; // Relative address
+  ADR = ADR + 2          ; // Set pointer for next instruction
+ endtask
+
+//  X86 instructions: JMP (unconditional) and CALL
+ task asJMP (); // JMP  toAddress (or register)
+  input [7:0] opcode,modcode;
+  input [19:0] Dest;
+  if (Dest & 'h20000)     // Test if register ID
+   begin // Address is in a register
+    progMem[ADR] <= 'hFF; // Opcode for indirect
+    progMem[ADR+1] <= regReg(modcode,Dest[2:0]);
+    ADR = ADR + 2          ; // Set pointer to next instruction
+   end
+  else  // Address is a relative memory location
+   begin
+    progMem[ADR] <= opcode; // Opcode for direct (16-bit relative address)
+    {progMem[ADR+2],progMem[ADR+1]} <= Dest - ADR - 3    ; 
+    ADR = ADR + 3;
+   end
+ endtask
+
+//  X86 instructions: Multiply by AL or AX
+ task asMUL (); // Multiply AL or AX
+  input [7:0] opcode;
+  input [19:0] regID;
+  progMem[ADR] <= opcode | regID>>17  ; // Set Word bit with MUL 
+  progMem[ADR+1] <= regReg(4,regID) ; // 
+  ADR = ADR + 2          ; // Set pointer for next instruction
+ endtask
+
+//  X86 instructions: Input and Output
+ task asIN (); // IN and OUT
+  input [7:0] opcode;
+  input [19:0] p1,p2;
+  progMem[ADR] <= opcode; // Assume AL,(DX) for now
+  ADR = ADR + 1;
+ endtask
+
+//  X86 instructions: MOV (i.e., really a copy)
+ task asMOV (); // Move immediate or register-to-register
+  input [19:0] Dest, Source; // MOV  Dest, Source
+   if (Source & 'h30000)     // Test if register ID or constant
+    begin // Source is a register
+     progMem[ADR] <= 'h88 | Source>>17  ; // Set Word bit
+     progMem[ADR+1] <= regReg(Source[2:0],Dest[2:0]);
+     ADR = ADR + 2          ; // Set pointer to next instruction
+    end
+   else  // Source is an immediate constant
+    if (Dest & 'h10000)          // Test if byte immediate
+     begin
+      progMem[ADR] <= 'hB0 | Dest[2:0]; // Opcode with register
+      progMem[ADR+1] <= Source[7:0]    ; // 8-bit data
+      ADR = ADR + 2;
+     end
+    else  // MOV word-reg,constant
+     begin
+      progMem[ADR] <= 'hB8 | Dest[2:0];
+      progMem[ADR+1] <= Source[7:0]    ; // Low order byte of
+      progMem[ADR+2] <= Source[15:8]   ; // 16-bit word
+      ADR = ADR + 3;
+     end
+ endtask
+
+//  X86 instructions: ADD, SUB, AND, OR, and XOR (with AL or AX)
+ task asADD (); // ADD... with two parameters
+  input [7:0] opcode;
+  input [19:0] Dest, Source; // ADD  Dest, Source
+   if (Dest & 'h10000)          // Test if byte immediate
+    begin  // ADD AL,constant
+     progMem[ADR] <= opcode; // Opcode with register
+     progMem[ADR+1] <= Source[7:0]    ; // Only one byte
+     ADR = ADR + 2;
+    end
+   else  // ADD AX,constant
+    begin
+     progMem[ADR] <=  opcode | 1      ; // Word flag     
+     progMem[ADR+1] <= Source[7:0]    ; // Low order byte of
+     progMem[ADR+2] <= Source[15:8]   ; // 16-bit word
+     ADR = ADR + 3;
+    end
+ endtask
+
+//  Tasks to assist constructing Verilog execution of 8086 instructions:
+//     exe8: Update 8-bit data registers, IP register, and status bits
+//     exe16: Update 16-bit data registers, IP register, and status bits
+//     upstat8: Update status bits and IP register for 8-bit "answers"
+//     upstat16: Update status bits and IP register for 16-bit "answers"
+
+//  2-byte instruction, such as add 8-bit immediate value: exe8 (source, destination);
+//  Update destination register, status bits, and IP register for 2-byte instructions
+ task exe8 (); // 
+  input [15:0] source;
+  output [7:0] dest;
+  dest <= source;
+  upstat8 (source, 2);
+ endtask
+
+//  3-byte instruction, such as add 16-bit immediate value: exe16 (source, destination);
+//  Update destination register, status bits, and IP register for 3-byte instructions
+ task exe16 (); // 
+  input [15:0] source;
+  output [15:0] dest;
+  dest <= source;
+  upstat16 (source, 3);
+ endtask
+
+//  Update status bits and IP register for 8-bit "answers"
+//     upstat8 (8-bit answer, instruction byte count); 
+ task upstat8 (); // 
+  input [7:0] answer, nbyte;
+  `SF = answer[7];
+  `ZF = answer==0;
+  `OF = 0;
+  IP <= IP + nbyte;
+ endtask
+
+//  Update status bits and IP register for 16-bit "answers"
+//     upstat16 (16-bit answer, instruction byte count); 
+ task upstat16 (); // 
+  input [15:0] answer, nbyte;
+  `SF = answer[15];
+  `ZF = answer==0;
+  `OF = 0;
+  IP <= IP + nbyte;
+ endtask
+
+ //  Function to build "mode" byte with two register operands
+ function [7:0] regReg;
+  input [2:0]  regID, RM; 
+  regReg = {2'b11,regID[2:0],RM[2:0]};  // F
+ endfunction
+
+ always @ (posedge(CLOCK_50))
+  begin
+// Reset when KEY[0] is pushed
+   if (KEY[0]==0)
+    begin
+//   Initial load of X86 "memory"
+     integer Fact, Exit;     // List of "labels" in X86 program
+//   Address 0 receives control on X86 imitation system reset
+     `ORG  0               `_ // Set assembly time memory address
+     `MOV  AX,0            `_ // Initialize AX to zero
+     `MOV  SP,'hFF         `_ // Initialize Stack Pointer to high memory
+     `HLT                  `_ // Stop and wait for interrupts.
+//   Address h10 receives control on illegal instruction interrupt
+     `ORG  'h10            `_ // Set assembly time memory address
+     `HLT                  `_ // Stop execution at illegal opcode adr.
+//   Address 'h20 receives control on I/O interrupt
+     `ORG  'h20            `_ // Set assembly time memory address
+     `IN   AL,(DX)         `_ // Read switches into the AL register
+     `CBW                  `_ // Extend sign bit through AH
+     `CALL Fact            `_ // Call function to calculate factorial      
+     `IRET                 `_ // Go back to IP address interrupted
+
+//   Function Fact calculates factorial: N! = N * (N-1) * ... * 1
+//   Register AX input: N (maximum value of 8): Calculate N!
+//   Register AX output: Calculated factorial: N!
+//   Contents of registers CX and DX are not preserved.
+Fact `LABEL                `_ // Address of subroutine
+     `CMP  AX,2            `_ // Test for end condition of 1! or 2!
+     `JLE  Exit            `_ // Exit with AX containing the factorial
+     `PUSH AX              `_ // Save input value N.
+     `DEC  AX              `_ // Get (N - 1)
+     `CALL Fact            `_ // Calculate (N-1) factorial      
+     `POP  CX              `_ // Reload input value N.
+     `MUL  CX              `_ // Next product in factorial: AX * CX 
+Exit `LABEL                `_ // Return with factorial in AX
+     `RET                  `_ // Return address was on run-time stack
+
+     progMem['hFF] <= 0;    // Last byte of X86 "memory"
+     IP <= 0;               // Initialize Instruction Pointer register
+     run <= 1;              // Initialize Halt/Run mode
+     `IF <= 1;              // Enable I/O and software interrupts
+    end
+   else
+//  I/O Interrupt when KEY[1] is pushed and interrupts are enabled
+    if (KEY[1]==0 & `IF)
+     begin
+      RetAdr <= IP;         // Address of instruction after interrupt
+      IP <= 'h20;           // Set IP to interrupt service routine
+      RetFlags <= status86;
+      `IF <= 0;             // Disable further interrupts
+      run <= 1;             // Halt instruction may have executed
+     end
+    else
+//   Execute the 8086 instruction at the current IP address.
+     if (run)
+      casez (progMem[IP])   // Opcode in first byte of instruction
+       'h04:                // ADD: Add immediate value to accumulator
+        exe8 (`AL + progMem[IP+1], `AL);
+       'h05:                // ADDW: Add immediate 16-bit value to accumulator
+        exe16 (`AX + {progMem[IP+2],progMem[IP+1]}, `AX);
+       'h24:                // AND: Logical AND with accumulator value
+        exe8 (`AL & progMem[IP+1], `AL);
+       'h25:                // ANDW: Logical AND with 16-bit accumulator
+        exe16 (`AX & {progMem[IP+2],progMem[IP+1]}, `AX);
+       'hE8:                 // CALL to Address
+        begin
+         {dataMem[`SP-2],dataMem[`SP-1]} <= IP + 3;
+         `SP <= `SP - 2;    // Reposition "top" of stack
+         IP <= {progMem[IP+2],progMem[IP+1]} + IP + 3;
+        end
+       'h98:                // CBW: Convert Byte to Word (AL -> AX)
+        begin
+         `AH = `AX[7] ? 'hFF : 0; // Sign extend AL through AH
+         IP <= IP + 1;
+        end
+       'h3C:                // CMP: Compare (subtract) immediate with AL
+        upstat8 (`AL - progMem[IP+1], 2);
+       'h3D:                // CMP: Compare (subtract) immediate with AX
+        upstat16 (`AX - {progMem[IP+2],progMem[IP+1]}, 3);
+       'b01001???:          // DEC: Subtract 1 from value in 16-bit register
+        begin
+         regW[progMem[IP][2:0]] <= regW[progMem[IP][2:0]] - 1;
+         upstat16 (regW[progMem[IP][2:0]] - 1, 1);
+        end
+       'hF4:                // HLT: Halt
+        run <= 0;
+       'hEC:                // IN: Input; Copy input port into register AL
+        begin
+         `AL <= SW[7:0];    // Input port assigned to switches
+         IP <= IP + 1;
+        end
+       'b01000???:          // INC: Add 1 to value in a 16-bit register
+        begin
+         regW[progMem[IP][2:0]] <= regW[progMem[IP][2:0]] + 1;
+         upstat16 (regW[progMem[IP][2:0]] + 1, 1);
+        end
+       'hCC:                // INT: Software Interrupt
+        begin
+         RetAdr <= IP;
+         IP <= 'h20;
+         RetFlags <= status86;
+         `IF <= 0;          // Disable further interrupts
+        end
+       'hCF:                // IRET: Interrupt Return
+        begin
+         status86 <= RetFlags;
+         IP <= RetAdr;
+        end
+       'hE9:                // JMP: Long jump direct
+        IP <= IP + {progMem[IP+2],progMem[IP+1]} + 2;
+       'hFF:                // JMP or CALL: Indirect (in register)
+        begin
+         IP <= regW[progMem[IP+1][2:0]];
+         if (progMem[IP+1][5:3]==2)   // Test if CALL Indirect
+          begin
+           {dataMem[`SP-2],dataMem[`SP-1]} <= IP + 2;
+           `SP <= `SP - 2;    // Reposition "top" of stack
+          end
+        end
+       'hE3:                // JCXZ: Jump if CX is zero
+        IP <= `CX == 0 ? IP + progMem[IP+1] + 2 : IP + 2;
+       'h7F:                // JG: Jump if Greater
+        IP <= (`SF == `OF) & ~`ZF ? IP + progMem[IP+1] + 2 : IP + 2;
+       'h7D:                // JGE: Jump if Greater or Equal
+        IP <= `SF == `OF ? IP + progMem[IP+1] + 2 : IP + 2;
+       'h7C:                // JL: Jump if Less
+        IP <= `SF != `OF ? IP + progMem[IP+1] + 2 : IP + 2;
+       'h7E:                // JLE: Jump if Less or Equal
+        IP <= (`SF != `OF) | `ZF ? IP + progMem[IP+1] + 2 : IP + 2;
+       'h75:                // JNZ: Jump if Non-Zero, Jump if Not Equal
+        IP <= ~`ZF ? IP + progMem[IP+1] + 2 : IP + 2;
+       'h74:                // JZ: Jump if Zero, Jump if Equal
+        IP <= `ZF ? IP + progMem[IP+1] + 2 : IP + 2;
+       'hE2:                // LOOP: Decrement CX and jump if non-zero
+        begin
+         `CX <= `CX - 1;
+         IP <= `CX==1 ? IP + 2 : IP + progMem[IP+1] + 2;
+        end
+       'b101100??:          // MOV: MOV immediate AL, CL, DL, BL
+        begin
+         regW[progMem[IP][1:0]] [7:0] <= progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'b101101??:          // MOV: MOV immediate AH, CH, DH, BH
+        begin
+         regW[progMem[IP][1:0]] [15:8] <= progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'b10111???:          // MOVW: MOV immediate 16-bit value to 16-bit register
+        begin
+         regW[progMem[IP][2:0]] <= {progMem[IP+2],progMem[IP+1]};
+         IP <= IP + 3;
+        end
+       'h89:                // MOVR: MOV from one 16-bit register to another
+        begin
+         regW[progMem[IP+1][2:0]] <= regW[progMem[IP+1][5:3]];
+         IP <= IP + 2;
+        end
+       'hF7:                // MULR: Multiply AX by another 16-bit register
+        begin
+         {`DX,`AX} <= `AX * regW[progMem[IP+1][2:0]];
+         upstat16 (`AX * regW[progMem[IP+1][2:0]],2);
+        end
+       'h90:                // NOP: No Operation
+        IP <= IP + 1;
+       'hEE:                // OUT: Output; Copy AL contents to output port\begin
+        begin
+         OutPort0 <= `AL;   // Output port (buffer for LEDs)
+         IP <= IP + 1;
+        end
+       'h0C:                // OR: Inclusive OR with accumulator value
+        exe8 (`AL | progMem[IP+1], `AL);
+       'h0D:                // ORW: Inclusive OR with 16-bit AX value
+        exe16 (`AX | {progMem[IP+2],progMem[IP+1]}, `AX);
+       'b01011???:          // POP: Reload 16-bit register contents from stack
+        begin
+         regW[progMem[IP][2:0]] <= {dataMem[`SP],dataMem[`SP+1]};
+         `SP <= `SP + 2;    // Reposition "top" of stack
+         IP <= IP + 1;
+        end
+       'b01010???:          // PUSH: Copy 16-bit register contents onto stack
+        begin
+         {dataMem[`SP-2],dataMem[`SP-1]} <= regW[progMem[IP][2:0]];
+         `SP <= `SP - 2;    // Reposition "top" of stack
+         IP <= IP + 1;
+        end
+       'h9C:                // POPF: Reload 16-bit status register contents from stack
+        begin
+         status86 <= {dataMem[`SP],dataMem[`SP+1]};
+         `SP <= `SP + 2;    // Reposition "top" of stack
+         IP <= IP + 1;
+        end
+       'h9D:                // PUSHF: Copy 16-bit status register onto stack
+        begin
+         {dataMem[`SP-2],dataMem[`SP-1]} <= status86;
+         `SP <= `SP - 2;    // Reposition "top" of stack
+         IP <= IP + 1;
+        end
+       'hC3:                // RET: Reload IP register contents from stack
+        begin
+         IP <= {dataMem[`SP],dataMem[`SP+1]};
+         `SP <= `SP + 2;    // Reposition "top" of stack
+        end
+       'h2C:                // SUB: Subtract immediate from accumulator
+        exe8 (`AL - progMem[IP+1], `AL);
+       'h2D:                // SUBW: Subtract 16-bit immediate from AX
+        exe16 (`AX - {progMem[IP+2],progMem[IP+1]}, `AX);
+       'hA8:                // TEST: Compare (AND) immediate with AL
+        upstat8 (`AL & progMem[IP+1], 2);
+       'hA9:                // TEST: Compare (AND) immediate with AX
+        upstat16 (`AX & {progMem[IP+2],progMem[IP+1]}, 3);
+       'h34:                // XOR: Exclusive OR with accumulator value
+        exe8 (`AL ^ progMem[IP+1], `AL);
+       'h35:                // XORW: Exclusive OR 16 bit with AX
+        exe16 (`AX ^ {progMem[IP+2],progMem[IP+1]}, `AX);
+       default:             // Undefined Operation Code
+        IP <= 'h10;
+      endcase
+  end
+endmodule

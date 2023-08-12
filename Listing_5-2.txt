@@ -1,0 +1,13 @@
+module X86_UI (CLOCK_50, LEDR);
+ input  CLOCK_50;
+ output [9:0] LEDR;
+ parameter maxCount = 50000000;
+ reg squareWave;
+ reg [31:0] count;
+ assign LEDR[0] = squareWave;
+ always @ (posedge(CLOCK_50))
+  begin 
+   count <= count==maxCount ? 1 : count + 1;
+   squareWave <= count>maxCount>>1 ? 1 : 0;
+  end
+endmodule

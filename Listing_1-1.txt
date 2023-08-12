@@ -1,0 +1,7 @@
+// Connect LEDRs to KEYs
+module X86_UI (KEY, LEDR);
+ input  [1:0] KEY;
+ output [9:0] LEDR;
+ assign LEDR[0] = KEY[0]; // Connect LEDR[0] to KEY[0]
+ assign LEDR[1] = KEY[1]; // Connect LEDR[1] to KEY[1]
+endmodule

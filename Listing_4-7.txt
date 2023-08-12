@@ -1,0 +1,8 @@
+module X86_UI (CLOCK_50, LEDR);
+ input  CLOCK_50;
+ output [9:0] LEDR;
+ reg    [31:0] count;
+ assign LEDR = count >> 20;
+ always @ (posedge(CLOCK_50))
+  count <= count + 1;
+endmodule

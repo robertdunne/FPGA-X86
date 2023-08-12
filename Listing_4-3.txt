@@ -1,0 +1,15 @@
+// RS Flip Flop in behavioral coding
+module X86_UI (KEY, LEDR);
+ input  [1:0] KEY;
+ output [9:0] LEDR;
+ reg Q, Qbar;
+ assign LEDR[0] = Q;
+ assign LEDR[1] = Qbar;
+ assign LEDR[2] = KEY[0];
+ assign LEDR[3] = KEY[1];
+ always @ (KEY[0], KEY[1])
+  begin
+   Q = ~(KEY[0] & Qbar; // Set with KEY[0]
+   Qbar = ~(KEY[1] & Q; // Reset with KEY[1]
+  end
+endmodule

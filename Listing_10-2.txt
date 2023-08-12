@@ -1,0 +1,306 @@
+// Listing 10.2: Implement ORG command to set assembly-time Instruction Pointer
+//   1) SW[9:8] select which of AX, CX, DX, BX for hexadecimal display
+//   2) X86 program: Calculate factorial of value on switches SW[7:0]
+//   3) KEY[1] is interrupt signal to read the switch contents
+//   4) KEY[0] resets this X86 imitation
+
+module X86_UI (KEY, CLOCK_50, SW, LEDR, HEX0, HEX1, HEX2, HEX3, HEX4, HEX5);
+ input  [1:0] KEY;
+ input  CLOCK_50;
+ input  [9:0] SW;
+ output [9:0] LEDR;
+ output [7:0] HEX0, HEX1, HEX2, HEX3, HEX4, HEX5;
+//  4-bit binary number displayed on 7-seg display in hexadecimal
+ function [7:0] digit;
+  input [3:0] num; 
+  case (num)
+    0:  digit = 8'b11000000;  // 0
+    1:  digit = 8'b11111001;  // 1
+    2:  digit = 8'b10100100;  // 2
+    3:  digit = 8'b10110000;  // 3
+    4:  digit = 8'b10011001;  // 4
+    5:  digit = 8'b10010010;  // 5
+    6:  digit = 8'b10000010;  // 6
+    7:  digit = 8'b11111000;  // 7
+    8:  digit = 8'b10000000;  // 8
+    9:  digit = 8'b10010000;  // 9
+    10: digit = 8'b10001000;  // A
+    11: digit = 8'b10000011;  // b
+    12: digit = 8'b11000110;  // C
+    13: digit = 8'b10100001;  // d
+    14: digit = 8'b10000110;  // E
+    15: digit = 8'b10001110;  // F
+   endcase
+  endfunction
+// Registers and memory for 8086 imitation
+ reg [7:0] progMem [0:255]; // Program memory
+ reg [7:0] IP;              // Instruction Pointer
+ reg [15:0] regW [0:7];     // AX, CX, DX, BX, SP, BP, SI, DI
+ reg C_flag;                // Carry flag
+ reg A_flag;                // Auxilary Carry flag (DAA)
+ reg [7:0] RetAdr;          // Return Address for interrupt
+ reg [2:0] RetFlags;        // Flags saved during interrupt
+ reg run;                   // Mode: running or halted
+ reg intEn;                 // Interrupt enable flag
+ reg [7:0] OutPort0;        // Register for output bit display
+
+ assign HEX5 = digit(IP[7:4]); // Display Instruction Pointer
+ assign HEX4 = digit(IP[3:0]);
+ assign HEX3 = digit(regW[SW[9:8]][15:12]); // Display 16-bit register
+ assign HEX2 = digit(regW[SW[9:8]][11:8]);  // SW[9:8]==0 => AX,
+ assign HEX1 = digit(regW[SW[9:8]][7:4]);   // 1 => CX, 2 => DX,
+ assign HEX0 = digit(regW[SW[9:8]][3:0]);   // SW[9:8]==3 => BX
+ assign LEDR[7:0] = OutPort0;   // Display output address 0
+ 
+// Provide macros and numbers assigned to data registers.
+ `define AX regW[0]     // 16-bit accumulator register
+ `define BX regW[3]     // 16-bit base register
+ `define CX regW[1]     // 16-bit count register
+ `define DX regW[2]     // 16-bit destination register
+ `define AL `AX[7:0]    // Lower 8 bits of AX register
+ `define AH `AX[15:8]   // Upper 8 bits of AX register
+ parameter AX  = 'h00;  // 16-bit accumulator ID
+ parameter CX  = 'h01;  // 16-bit count register ID
+ parameter DX  = 'h02;  // 16-bit destination/data ID
+ parameter BX  = 'h03;  // 16-bit base register ID
+ parameter AL  = 'h00;  // ID for lower byte of AX
+ parameter CL  = 'h01;  // ID for lower byte of CX
+ parameter DL  = 'h02;  // ID for lower byte of DX
+ parameter BL  = 'h03;  // ID for lower byte of BX
+ parameter AH  = 'h04;  // ID for higher byte of AX
+ parameter CH  = 'h05;  // ID for higher byte of CX
+ parameter DH  = 'h06;  // ID for higher byte of DX
+ parameter BH  = 'h07;  // ID for higher byte of BX
+
+// 8086 opcodes and instruction mnemonics
+ parameter ADD  = 'h04; // Add a constant to value in AL
+ parameter AND  = 'h24; // Logical AND of constant with AL
+ parameter CBW  = 'h98; // Convert Byte to Word (AL -> AX)
+ parameter DEC  = 'h48; // Decrement register
+ parameter HLT  = 'hF4; // Halt
+ parameter IN   = 'hEC; // Input to register AL
+ parameter INC  = 'h40; // Increment register value
+ parameter INT  = 'hCC; // Software Interrupt
+ parameter IRET = 'hCF; // Interrupt Return
+ parameter LOOP = 'hE2; // Loop using register CX to count
+ parameter MOV  = 'hB0; // Move immediate byte register
+ parameter MOVB = 'h88; // Move byte register to byte register
+ parameter MUL  = 'hF6; // Multiple AL and another byte register
+ parameter NOP  = 'h90; // No Operation
+ parameter OUT  = 'hEE; // Output contents of register AL
+ parameter OR   = 'h0C; // Logical OR of constant with AL
+ parameter SUB  = 'h2C; // Subtract a constant from AX AL
+ parameter XOR  = 'h34; // Logical XOR of constant with AX AL
+
+// 8086 opcodes and instruction mnemonics for 16-bit Word register
+ parameter ADDW = 'h05; // Add a constant to value in AX
+ parameter ANDW = 'h25; // Logical AND of constant with AX
+ parameter MOVW = 'hB8; // Move immediate word register
+ parameter MOVR = 'h89; // Move word register to word register
+ parameter MULR = 'hF7; // Multiple AX and another word register
+ parameter ORW  = 'h0D; // Logical OR of constant with AX
+ parameter SUBW = 'h2D; // Subtract a constant from AX
+ parameter XORW = 'h35; // Logical XOR of constant with AX
+
+//
+//---------------- Macro definitions for assembly language ----------------
+//
+ `define LABEL = (ADR     // Assign assembly-time IP to a label
+ `define ORG   ADR = (    // Directive to set memory address
+ `define _     );         // End of instruction and directive
+
+ integer ADR;             // Assembly time instruction pointer
+
+ //  Function to build "mode" byte with two register operands
+ function [7:0] regReg;
+  input [2:0]  regID, RM; 
+  regReg = {2'b11,regID[2:0],RM[2:0]};  // F
+ endfunction
+
+ always @ (posedge(CLOCK_50))
+  begin
+// Reset when KEY[0] is pushed
+   if (KEY[0]==0)
+    begin
+//   Initial load of X86 "memory"
+     integer FLoop;           // List of "labels" in X86 program
+//   Address 0 receives control on X86 imitation system reset
+     `ORG  0                `_ // Set assembly time memory address
+     progMem[ADR] <= MOVW | AX; // MOV AX,0
+     progMem[ADR+1] <= 0    ; // "Immediate" 16-bit value of 0
+     progMem[ADR+2] <= 0    ; // 
+     ADR = ADR + 3          ; // Set pointer for next instruction
+     progMem[ADR] <= HLT    ; // Stop and wait for interrupts.
+     ADR = ADR + 1          ; // Set pointer for next instruction
+//   Address h10 receives control on illegal instruction interrupt
+     `ORG  'h10             `_ // Set assembly time memory address
+     progMem[ADR] <= HLT    ; // Illegal instruction interrupt
+     ADR = ADR + 1          ; // Set pointer for next instruction
+//   Address 'h20 receives control on I/O interrupt
+     `ORG  'h20             `_ // Set assembly time memory address
+     progMem[ADR] <= IN     ; // Read switches into the AL register
+     ADR = ADR + 1          ; //Set pointer for next instruction
+     progMem[ADR] <= CBW    ; // Extend sign bit through AH
+     ADR = ADR + 1          ; // Set pointer for next instruction
+     progMem[ADR] <= MOVR   ; // MOV CX,AX ; Copy AX into CX
+     progMem[ADR+1] <= regReg(AX,CX) ; // Mode byte
+     ADR = ADR + 2          ; // Set pointer for next instruction
+     progMem[ADR] <= MOVW | AX; // MOV AX,1
+     progMem[ADR+1] <= 1    ; // "Immediate" 16-bit value of 1
+     progMem[ADR+2] <= 0    ; // 
+     ADR = ADR + 3          ; // Set pointer for next instruction
+FLoop `LABEL                `_ // Address of top of loop
+     progMem[ADR] <= MULR   ; // MUL CX: AX*CX -> DX,AX
+     progMem[ADR+1] <= regReg(4,CX) ; // 4 = 'b100 => Unsigned multiply
+     ADR = ADR + 2          ; // Set pointer for next instruction
+     progMem[ADR] <= LOOP   ; // Decrement CX, jump if non-zero
+     progMem[ADR+1] <= FLoop - ADR - 2 ; // Relative top of loop address
+     ADR = ADR + 2          ; // Set pointer for next instruction
+     progMem[ADR] <= IRET   ; // Go back to interrupt address
+     ADR = ADR + 1          ; // Set pointer for next instruction
+
+     progMem['hFF] <= 0;    // Last byte of X86 "memory"
+     IP <= 0;               // Initialize Instruction Pointer register
+     run <= 1;              // Initialize Halt/Run mode
+     intEn <= 1;            // Enable I/O and software interrupts
+    end
+   else
+//  I/O Interrupt when KEY[1] is pushed and interrupts are enabled
+    if (KEY[1]==0 & intEn)
+     begin
+      RetAdr <= IP;         // Address of instruction after interrupt
+      IP <= 'h20;           // Set IP to interrupt service routine
+      RetFlags <= {intEn,C_flag,A_flag};
+      intEn <= 0;           // Disable further interrupts
+      run <= 1;             // Halt instruction may have executed
+     end
+    else
+//   Execute the 8086 instruction at the current IP address.
+     if (run)
+      casez (progMem[IP])   // Opcode in first byte of instruction
+       'h04:                // ADD: Add immediate value to accumulator
+        begin
+         `AL <= `AL + progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'h05:                // ADDW: Add immediate 16-bit value to accumulator
+        begin
+         `AX <= `AX + {progMem[IP+2],progMem[IP+1]};
+         IP <= IP + 3;
+        end
+       'h24:                // AND: Logical AND with accumulator value
+        begin
+         `AL <= `AL & progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'h25:                // ANDW: Logical AND with 16-bit accumulator
+        begin
+         `AX <= `AX & {progMem[IP+2],progMem[IP+1]};
+         IP <= IP + 3;
+        end
+       'h98:                // CBW: Convert Byte to Word (AL -> AX)
+        begin
+         `AH = `AX[7] ? 'hFF : 0; // Sign extend AL through AH
+         IP <= IP + 1;
+        end
+       'b01001???:          // DEC: Subtract 1 from value in 16-bit register
+        begin
+         regW[progMem[IP][2:0]] <= regW[progMem[IP][2:0]] - 1;
+         IP <= IP + 1;
+        end
+       'hF4:                // HLT: Halt
+        run <= 0;
+       'hEC:                // IN: Input; Copy input port into register AL
+        begin
+         `AL <= SW[7:0];    // Input port assigned to switches
+         IP <= IP + 1;
+        end
+       'b01000???:        // INC: Add 1 to value in a 16-bit register
+        begin
+         regW[progMem[IP][2:0]] <= regW[progMem[IP][2:0]] + 1;
+         IP <= IP + 1;
+        end
+       'hCC:                // INT: Software Interrupt
+        begin
+         RetAdr <= IP;
+         IP <= 'h20;
+         RetFlags <= {intEn,C_flag,A_flag};
+         intEn <= 0;        // Disable further interrupts
+        end
+       'hCF:                // IRET: Interrupt Return
+        begin
+         {intEn,C_flag,A_flag} <= RetFlags;
+         IP <= RetAdr;
+        end
+       'hE2:                // LOOP: Decrement CX and jump if non-zero
+        begin
+         `CX <= `CX - 1;
+         IP <= `CX==1 ? IP + 2 : IP + progMem[IP+1] + 2;
+        end
+       'b101100??:          // MOV: MOV immediate AL, CL, DL, BL
+        begin
+         regW[progMem[IP][1:0]] [7:0] <= progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'b101101??:          // MOV: MOV immediate AH, CH, DH, BH
+        begin
+         regW[progMem[IP][1:0]] [15:8] <= progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'b10111???:          // MOVW: MOV immediate 16-bit value to 16-bit register
+        begin
+         regW[progMem[IP][2:0]] <= {progMem[IP+2],progMem[IP+1]};
+         IP <= IP + 3;
+        end
+       'h89:          // MOVR: MOV from one 16-bit register to another
+        begin
+         regW[progMem[IP+1][2:0]] <= regW[progMem[IP+1][5:3]];
+         IP <= IP + 2;
+        end
+       'hF7:                // MULR: Multiply AX by another 16-bit register
+        begin
+         {`DX,`AX} <= `AX * regW[progMem[IP+1][2:0]];
+         IP <= IP + 2;
+        end
+       'h90:                // NOP: No Operation
+        IP <= IP + 1;
+       'hEE:                // OUT: Output; Copy AL contents to output port\begin
+        begin
+         OutPort0 <= `AL;   // Output port (buffer for LEDs)
+         IP <= IP + 1;
+        end
+       'h0C:                // OR: Inclusive OR with accumulator value
+        begin
+         `AL <= `AL | progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'h0D:                // ORW: Inclusive OR with 16-bit AX value
+        begin
+         `AX <= `AX | {progMem[IP+2],progMem[IP+1]};
+         IP <= IP + 3;
+        end
+       'h2C:                // SUB: Subtract immediate from accumulator
+        begin
+         `AL <= `AL - progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'h2D:                // SUBW: Subtract 16-bit immediate from AX
+        begin
+         `AX <= `AX - {progMem[IP+2],progMem[IP+1]};
+         IP <= IP + 3;
+        end
+       'h34:                // XOR: Exclusive OR with accumulator value
+        begin
+         `AL <= `AL ^ progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'h35:                // XORW: Exclusive OR 16 bit with AX
+        begin
+         `AX <= `AX ^ {progMem[IP+2],progMem[IP+1]};
+         IP <= IP + 3;
+        end
+       default:             // Undefined Operation Code
+        IP <= 'h10;
+      endcase
+  end
+endmodule

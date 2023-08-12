@@ -1,0 +1,41 @@
+module X86_UI (KEY, CLOCK_50, LEDR, HEX0, HEX1, HEX2, HEX3, HEX4, HEX5);
+ input  [1:0] KEY;
+ input  CLOCK_50;
+ output [9:0] LEDR;
+ output [7:0] HEX0, HEX1, HEX2, HEX3, HEX4, HEX5;
+ function [7:0] digit;
+  input [3:0] num; 
+  case (num)
+    0:  digit = 8'b11000000;  // 0
+    1:  digit = 8'b11111001;  // 1
+    2:  digit = 8'b10100100;  // 2
+    3:  digit = 8'b10110000;  // 3
+    4:  digit = 8'b10011001;  // 4
+    5:  digit = 8'b10010010;  // 5
+    6:  digit = 8'b10000010;  // 6
+    7:  digit = 8'b11111000;  // 7
+    8:  digit = 8'b10000000;  // 8
+    9:  digit = 8'b10010000;  // 9
+    10: digit = 8'b10001000;  // A
+    11: digit = 8'b10000011;  // b
+    12: digit = 8'b11000110;  // C
+    13: digit = 8'b10100001;  // d
+    14: digit = 8'b10000110;  // E
+    15: digit = 8'b10001110;  // F
+   endcase
+  endfunction
+ reg [31:0] count;
+ assign LEDR[9:0] = count[31:22];
+ assign HEX5 = digit(count[31:28]);
+ assign HEX4 = digit(count[27:24]);
+ assign HEX3 = digit(count[23:20]);
+ assign HEX2 = digit(count[19:16]);
+ assign HEX1 = digit(count[15:12]);
+ assign HEX0 = digit(count[11:8]);
+ always @ (posedge(CLOCK_50))
+  case (KEY[1:0])
+   'b00: count <=0;           // Both keys down: Reset to 0
+   'b01: count <= count - 1;  // Only KEY[1] down: Count down
+   'b10: count <= count + 1;  // Only KEY[0] down: Count up
+  endcase
+endmodule

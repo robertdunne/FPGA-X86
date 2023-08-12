@@ -1,0 +1,11 @@
+// Copy (and hold) switches when key is pushed.
+module X86_UI (KEY, SW, LEDR);
+ input [1:0] KEY;
+ input [9:0] SW;
+ output [9:0] LEDR;
+ reg Q; 
+ assign LEDR[0] = SW[0]; // Show input data line
+ assign LEDR[1] = Q; // Show latched data bit value
+ always @ (negedge(KEY[0]))
+  Q <= SW[0]; // "Clock in" the data bit
+endmodule

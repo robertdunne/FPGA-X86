@@ -1,0 +1,9 @@
+// RS Flip Flop
+module X86_UI (KEY, LEDR);
+ input  [1:0] KEY;
+ output [9:0] LEDR;
+ wire Q, Qbar;
+ assign Q = ~(KEY[0] & Qbar; // Logical NAND
+ assign Qbar =  ~(KEY[1] & Q; // Logical NAND
+ assign LEDR[0] = Q;
+endmodule

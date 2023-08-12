@@ -1,0 +1,79 @@
+// Listing 17.1: Output to LED using GPIO signal lines on FPGA board
+//   1) Slight update to Listing 5.5 which produced clock signals
+//   2) oneSecond clock stream is output on GPIO[0]
+
+module X86_UI (KEY, SW, CLOCK_50, LEDR, HEX0, HEX1, HEX2, HEX3, HEX4, HEX5, GPIO);
+ parameter base = 10; // Display time in decimal
+ input  [1:0] KEY;
+ input  [9:0] SW;
+ input  CLOCK_50;
+ output [9:0] LEDR;
+ output [7:0] HEX0, HEX1, HEX2, HEX3, HEX4, HEX5;
+ inout [1:0] GPIO;
+ wire oneMSec, oneSecond, oneMinute, oneHour;
+ assign GPIO[0] = oneSecond;
+ clockDivider toSeconds (oneMSec, 1000, oneSecond);
+ clockDivider toMilliSeconds (CLOCK_50, 50000, oneMSec);
+ twoDigits Seconds (oneSecond, ~KEY[0], 59, base, HEX1, HEX0, oneMinute);
+ twoDigits Minutes (oneMinute, ~KEY[0], 59, base, HEX3, HEX2, oneHour);
+ twoDigits Hours   (oneHour,   ~KEY[0], 23, base, HEX5, HEX4, LEDR[8]);
+endmodule
+
+module twoDigits (clk, init, maxCount, base, tensDig, onesDig, carry);
+ input clk;
+ input init;
+ input [7:0] maxCount;
+ input [7:0] base;
+ output [7:0] tensDig;
+ output [7:0] onesDig;
+ output carry;
+ reg [7:0] count;
+ function [7:0] digit;
+  input [3:0] num; 
+  case (num)
+    0:  digit = 8'b11000000;  // 0
+    1:  digit = 8'b11111001;  // 1
+    2:  digit = 8'b10100100;  // 2
+    3:  digit = 8'b10110000;  // 3
+    4:  digit = 8'b10011001;  // 4
+    5:  digit = 8'b10010010;  // 5
+    6:  digit = 8'b10000010;  // 6
+    7:  digit = 8'b11111000;  // 7
+    8:  digit = 8'b10000000;  // 8
+    9:  digit = 8'b10010000;  // 9
+    10: digit = 8'b10001000;  // A
+    11: digit = 8'b10000011;  // b
+    12: digit = 8'b11000110;  // C
+    13: digit = 8'b10100001;  // d
+    14: digit = 8'b10000110;  // E
+    15: digit = 8'b10001110;  // F
+   endcase
+  endfunction
+ assign onesDig = digit(count%base);
+ assign tensDig = digit(count/base);
+ assign carry = count==0;
+ always @ (posedge(clk))
+  begin 
+   if (init)
+    count <= 0;
+   else
+    count <= count<maxCount ? count+1 : 0;
+  end
+endmodule
+
+module clockDivider (inputHz, divisor, outputHz);
+ input inputHz;
+ input [15:0] divisor;
+ output outputHz;
+ reg squareWave;
+ reg [15:0] countdown;
+ assign outputHz = squareWave;
+ always @ (posedge(inputHz))
+  begin 
+   if (countdown == 0)
+    countdown <= divisor - 1;
+   else
+    countdown <= countdown - 1;
+   squareWave <= countdown>divisor>>1 ? 1 : 0;
+  end
+endmodule

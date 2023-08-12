@@ -1,0 +1,171 @@
+// Listing 8.3: Add immediate value, then mask to 4 bits maximum
+//   1) Hexadecimal display updated when KEY[1] is pushed
+//   2) Use "ADD 5" then "AND b1111" in interrupt handler
+//   3) KEY[1] is interrupt signal to read the switch contents
+//   4) KEY[0] resets this X86 imitation
+
+module X86_UI (KEY, CLOCK_50, SW, LEDR, HEX2, HEX3, HEX4, HEX5);
+ input  [1:0] KEY;
+ input  CLOCK_50;
+ input  [9:0] SW;
+ output [9:0] LEDR;
+ output [7:0] HEX2, HEX3, HEX4, HEX5;
+//  4-bit binary number displayed on 7-seg display in hexadecimal
+ function [7:0] digit;
+  input [3:0] num; 
+  case (num)
+    0:  digit = 8'b11000000;  // 0
+    1:  digit = 8'b11111001;  // 1
+    2:  digit = 8'b10100100;  // 2
+    3:  digit = 8'b10110000;  // 3
+    4:  digit = 8'b10011001;  // 4
+    5:  digit = 8'b10010010;  // 5
+    6:  digit = 8'b10000010;  // 6
+    7:  digit = 8'b11111000;  // 7
+    8:  digit = 8'b10000000;  // 8
+    9:  digit = 8'b10010000;  // 9
+    10: digit = 8'b10001000;  // A
+    11: digit = 8'b10000011;  // b
+    12: digit = 8'b11000110;  // C
+    13: digit = 8'b10100001;  // d
+    14: digit = 8'b10000110;  // E
+    15: digit = 8'b10001110;  // F
+   endcase
+  endfunction
+// Registers and memory for 8086 imitation
+ reg [7:0] progMem [0:255]; // Program memory
+ reg [7:0] IP;              // Instruction Pointer
+ reg [7:0] AL;              // Accumulator register (Lower 8 bits)
+ reg C_flag;                // Carry flag
+ reg A_flag;                // Auxilary Carry flag (DAA)
+ reg [7:0] RetAdr;          // Return Address for interrupt
+ reg [2:0] RetFlags;        // Flags saved during interrupt
+ reg run;                   // Mode: running or halted
+ reg intEn;                 // Interrupt enable flag
+ reg [7:0] OutPort0;        // Register for output bit display
+
+ assign HEX5 = digit(IP[7:4]); // Display Instruction Pointer
+ assign HEX4 = digit(IP[3:0]);
+ assign HEX3 = digit(AL[7:4]); // Display AL register
+ assign HEX2 = digit(AL[3:0]);
+ assign LEDR[7:0] = OutPort0;   // Display output address 0
+
+// 8086 opcodes and instruction mnemonics
+ parameter ADD  = 'h04; // Add a constant to value register AL
+ parameter AND  = 'h24; // Logical AND of constant value with AL
+ parameter DEC  = 'h48; // Decrement AL register
+ parameter HLT  = 'hF4; // Halt
+ parameter IN   = 'hEC; // Input to register AL
+ parameter INC  = 'h40; // Increment AL accumulator register
+ parameter INT  = 'hCC; // Software Interrupt
+ parameter IRET = 'hCF; // Interrupt Return
+ parameter NOP  = 'h90; // No Operation
+ parameter OUT  = 'hEE; // Output contents of register AL
+ parameter OR   = 'h0C; // Logical OR of constant value with AL
+ parameter SUB  = 'h2C; // Subtract a constant from register AL
+ parameter XOR  = 'h34; // Logical XOR of constant value with AL
+
+ always @ (posedge(CLOCK_50))
+  begin
+// Reset when KEY[0] is pushed
+   if (KEY[0]==0)
+    begin
+//   Initial load of X86 "memory"
+//   Address 0 receives control on X86 imitation system reset
+     progMem[0]    <= HLT  ; // Stop and wait for interrupts.
+//   Address h10 receives control on illegal instruction interrupt
+     progMem['h10] <= HLT  ; // Illegal instruction interrupt
+//   Address 'h20 receives control on I/O interrupt
+     progMem['h20] <= IN   ; // Read switches into the AL register
+     progMem['h21] <= ADD  ; // Add "immediate" to the AL register
+     progMem['h22] <= 5    ; // "Immediate" value for preceding ADD
+     progMem['h23] <= AND  ; // "Mask off" all but lower 4 bits
+     progMem['h24] <= 'h0F ; // Mask for b0000 through b1111
+     progMem['h25] <= OUT  ; // Write AL register contents to LEDs
+     progMem['h26] <= IRET ; // Loop back to interrupt address
+
+     progMem['hFF] <= 0; // Last byte of X86 "memory"
+     IP <= 0;            // Initialize Instruction Pointer register
+     run <= 1;           // Initialize Halt/Run mode
+     intEn <= 1;         // Enable I/O and software interrupts
+    end
+   else
+//  I/O Interrupt when KEY[1] is pushed and interrupts are enabled
+    if (KEY[1]==0 & intEn)
+     begin
+      RetAdr <= IP;      // Address of instruction after interrupt
+      IP <= 'h20;        // Set IP to interrupt service routine
+      RetFlags <= {intEn,C_flag,A_flag};
+      intEn <= 0;        // Disable further interrupts
+      run <= 1;          // Halt instruction may have executed
+     end
+    else
+//   Execute the 8086 instruction at the current IP address.
+     if (run)
+      case (progMem[IP])    // Opcode in first byte of instruction
+       'h04:                // ADD: Add immediate value to accumulator
+        begin
+         AL <= AL + progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'h24:                // AND: Logical AND with accumulator value
+        begin
+         AL <= AL & progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'h48:                // DEC: Subtract 1 from value in accumulator
+        begin
+         AL <= AL - 1;
+         IP <= IP + 1;
+        end
+       'hF4:                // HLT: Halt
+        run <= 0;
+       'hEC:                // IN: Input; Copy input port into register AL
+        begin
+         AL <= SW[7:0];     // Input port 0 is assigned to switches
+         IP <= IP + 1;
+        end
+       'h40:                // INC: Add 1 to value in accumulator register
+        begin
+         AL <= AL + 1;
+         IP <= IP + 1;
+        end
+       'hCC:                // INT: Software Interrupt
+        begin
+         RetAdr <= IP;
+         IP <= 'h20;
+         RetFlags <= {intEn,C_flag,A_flag};
+         intEn <= 0;        // Disable further interrupts
+        end
+       'hCF:                // IRET: Interrupt Return
+        begin
+         {intEn,C_flag,A_flag} <= RetFlags;
+         IP <= RetAdr;
+        end
+       'h90:                // NOP: No Operation
+        IP <= IP + 1;
+       'hEE:                // OUT: Output; Copy AL contents to output port\begin
+        begin
+         OutPort0 <= AL;    // Output port 0 (buffer for LEDs)
+         IP <= IP + 1;
+        end
+       'h0C:                // OR: Inclusive OR with accumulator value
+        begin
+         AL <= AL | progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'h2C:                // SUB: Subtract immediate from accumulator
+        begin
+         AL <= AL - progMem[IP+1];
+         IP <= IP + 2;
+        end
+       'h34:                // XOR: Exclusive OR with accumulator value
+        begin
+         AL <= AL ^ progMem[IP+1];
+         IP <= IP + 2;
+        end
+       default:             // Undefined Operation Code
+        IP <= 'h10;
+      endcase
+  end
+endmodule

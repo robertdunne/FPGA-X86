@@ -1,0 +1,39 @@
+// Listing 6.1: X86 program consisting of NOP and HLT instructions
+//   1) KEY[0] resets this X86 imitation
+
+module X86_UI (KEY, CLOCK_50);
+ input  [1:0] KEY;
+ input  CLOCK_50;
+// Registers and memory for 8086 imitation
+ reg [7:0] progMem [0:255]; // Program memory
+ reg [7:0] IP;              // Instruction Pointer
+ reg run;                   // Mode: running or halted
+
+ always @ (posedge(CLOCK_50))
+  begin
+// Reset when KEY[0] is pushed
+   if (KEY[0]==0)
+    begin
+//   Initial load of X86 "memory"
+//   Address 0 receives control on X86 imitation system reset
+     progMem[0] <= 'h90;  // NOP: No Operation
+     progMem[1] <= 'h90;  // NOP: No Operation
+     progMem[2] <= 'h90;  // NOP: No Operation
+     progMem[3] <= 'hF4;  // HLT: Halt
+     progMem[4] <= 'h90;  // NOP: No Operation
+     progMem[5] <= 'hF4;  // HLT: Halt
+     progMem['hFF] <= 0;  // Last byte of X86 "memory"
+     IP <= 0;             // Initialize Instruction Pointer register
+     run <= 1;            // Initialize Halt/Run mode
+    end
+   else
+//  Execute the 8086 instruction at the current IP address.
+    if (run)
+     case (progMem[IP])    // Opcode in first byte of instruction 
+      'hF4:                // HLT: Halt
+       run <= 0;
+      'h90:                // NOP: No Operation
+       IP <= IP + 1;
+     endcase
+  end
+endmodule

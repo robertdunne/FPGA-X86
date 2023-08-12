@@ -1,0 +1,89 @@
+// Listing 7.1: Display binary value from switches on LED display
+//   1) Input and Output instructions added
+//   2) Accumulator AL register added
+//   3) LED display is updated with system reset (boot)
+//   4) KEY[0] resets this X86 imitation
+
+module X86_UI (KEY, CLOCK_50, SW, LEDR, HEX2, HEX3, HEX4, HEX5);
+ input  [1:0] KEY;
+ input  CLOCK_50;
+ input  [9:0] SW;
+ output [9:0] LEDR;
+ output [7:0] HEX2, HEX3, HEX4, HEX5;
+//  4-bit binary number displayed on 7-seg display in hexadecimal
+ function [7:0] digit;
+  input [3:0] num; 
+  case (num)
+    0:  digit = 8'b11000000;  // 0
+    1:  digit = 8'b11111001;  // 1
+    2:  digit = 8'b10100100;  // 2
+    3:  digit = 8'b10110000;  // 3
+    4:  digit = 8'b10011001;  // 4
+    5:  digit = 8'b10010010;  // 5
+    6:  digit = 8'b10000010;  // 6
+    7:  digit = 8'b11111000;  // 7
+    8:  digit = 8'b10000000;  // 8
+    9:  digit = 8'b10010000;  // 9
+    10: digit = 8'b10001000;  // A
+    11: digit = 8'b10000011;  // b
+    12: digit = 8'b11000110;  // C
+    13: digit = 8'b10100001;  // d
+    14: digit = 8'b10000110;  // E
+    15: digit = 8'b10001110;  // F
+   endcase
+  endfunction
+// Registers and memory for 8086 imitation
+ reg [7:0] progMem [0:255]; // Program memory
+ reg [7:0] IP;              // Instruction Pointer
+ reg [7:0] AL;              // Accumulator register (Lower 8 bits)
+ reg run;                   // Mode: running or halted
+ reg [7:0] OutPort0;        // Register for output bit display
+
+ assign HEX5 = digit(IP[7:4]); // Display Instruction Pointer
+ assign HEX4 = digit(IP[3:0]);
+ assign HEX3 = digit(AL[7:4]); // Display AL register
+ assign HEX2 = digit(AL[3:0]);
+ assign LEDR[7:0] = OutPort0;  // Display output address 0
+
+// 8086 opcodes and instruction mnemonics
+ parameter HLT  = 'hF4; // Halt
+ parameter IN   = 'hEC; // Input to register AL
+ parameter NOP  = 'h90; // No Operation
+ parameter OUT  = 'hEE; // Output contents of register AL
+
+ always @ (posedge(CLOCK_50))
+  begin
+// Reset when KEY[0] is pushed
+   if (KEY[0]==0)
+    begin
+//   Initial load of X86 "memory"
+//   Address 0 receives control on X86 imitation system reset
+     progMem[0]   <= IN ; // Read switches into the AL register
+     progMem[1]   <= OUT; // Write AL register contents to LEDs
+     progMem[2]   <= HLT; // Stop the program execution
+
+     progMem['hFF] <= 0;  // Last byte of X86 "memory"
+     IP <= 0;             // Initialize Instruction Pointer register
+     run <= 1;            // Initialize Halt/Run mode
+    end
+   else
+//   Execute the 8086 instruction at the current IP address.
+    if (run)
+     case (progMem[IP])    // Opcode in first byte of instruction 
+      'hF4:                // HLT: Halt
+       run <= 0;
+      'hEC:                // IN: Input; Copy input port into register AL
+       begin
+        AL <= SW[7:0];     // Input port 0 is assigned to switches
+        IP <= IP + 1;
+       end
+      'h90:                // NOP: No Operation
+       IP <= IP + 1;
+      'hEE:                // OUT: Output; Copy AL contents to output port\begin
+       begin
+        OutPort0 <= AL;    // Output port 0 (buffer for LEDs)
+        IP <= IP + 1;
+       end
+     endcase
+  end
+endmodule

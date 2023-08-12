@@ -1,0 +1,7 @@
+module X86_UI (SW, LEDR, HEX0);
+ input [6:0] SW;
+ output [6:0] LEDR;
+ output [6:0] HEX0;
+ assign LEDR = SW; // Connect switches to 7 LEDs
+ assign HEX0 = SW; // Connect switches to HEX0 segmnents
+endmodule

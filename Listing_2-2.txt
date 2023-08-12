@@ -1,0 +1,6 @@
+// LEDR[0] = Logical NAND of 2 KEYs
+module X86_UI (KEY, LEDR);
+ input  [1:0] KEY;
+ output [9:0] LEDR;
+ assign LEDR[0] = ~(KEY[0] & KEY[1]); // Logical NAND
+endmodule

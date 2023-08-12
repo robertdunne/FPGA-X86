@@ -1,0 +1,17 @@
+module X86_UI (KEY, CLOCK_50, LEDR);
+ input  [1:0] KEY;
+ input  CLOCK_50;
+ output [9:0] LEDR;
+ reg    [31:0] count;
+ assign LEDR[9:0] = count[29:20];
+ always @ (posedge(CLOCK_50))
+  begin 
+   if (~KEY[0]) // If pushed, ~KEY[0] = 1
+    count <= 0;
+   else
+    begin
+     if (KEY[1]) count <= count + 1; // If up, KEY[1] = 1
+     else count <= count - 1;
+    end
+  end
+endmodule
